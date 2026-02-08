@@ -1,4 +1,3 @@
-小熙
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -188,4 +187,5 @@ async def on_message(message):
 
 # --- 4. 运行 ---
 bot.run(os.environ.get('DISCORD_TOKEN'))
+
 
