@@ -8,7 +8,7 @@ WORKDIR /app
 COPY . .
 
 # 安装依赖 (如果你有 requirements.txt)
-RUN pip install discord.py
+RUN pip install -r requirements.txt
 
 # 运行机器人
 CMD ["python", "bot.py"]
