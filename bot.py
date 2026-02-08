@@ -117,7 +117,6 @@ async def start_build_flow(message, target_name, extracted_info, intro_text):
     
     embed = discord.Embed(
         title=f"{info['name']} 的专属档案", 
-        description="人家已经帮你记在小本本上啦~",
         color=random_color
     )
     embed.add_field(name="基本信息", value=f"性别：{info['gender']} | 年龄：{info['age']}", inline=False)
@@ -220,4 +219,5 @@ async def on_message(message):
 
 # --- 4. 运行 ---
 bot.run(os.environ.get('DISCORD_TOKEN'))
+
 
