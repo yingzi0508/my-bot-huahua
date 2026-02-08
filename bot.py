@@ -28,7 +28,6 @@ async def on_ready():
 
 # --- 2. 核心功能函数 ---
 
-# 【核心修改】：现在函数接收提取好的初步信息
 async def start_build_flow(message, target_name, extracted_info):
     """智能建档流程，能自动识别已有的信息"""
     def check(m):
@@ -44,11 +43,24 @@ async def start_build_flow(message, target_name, extracted_info):
         "bio": None
     }
 
-    await message.reply(f"收到！这就帮主人把 **{target_name}** 的档案建立起来！人家会尽量少问你问题的~")
+    # 【重要修改】：如果 AI 把名字识别成了“未知”或 None，
+    # 强制进入“先问名字”的流程
+    if info["name"] in ["未知", "None", None] or info["name"] == "":
+        q = await message.channel.send("好哒！要创建新角色呢~ 主人先告诉人家这个角色的名字叫什么好不好？")
+        try:
+            res = await bot.wait_for('message', check=check, timeout=60.0)
+            info["name"] = res.content
+            await q.delete()
+            await res.delete()
+        except asyncio.TimeoutError:
+            await q.delete()
+            return
+    else:
+        await message.reply(f"收到！这就帮主人把 **{info['name']}** 的档案建立起来！人家会尽量少问你问题的~")
 
     async def ask(text, info_key):
         # 如果信息已经有了，就直接跳过不问
-        if info.get(info_key):
+        if info.get(info_key) and info[info_key] not in ["None", None, ""]:
             return info[info_key]
         
         q = await message.channel.send(text)
@@ -63,11 +75,11 @@ async def start_build_flow(message, target_name, extracted_info):
             return None
 
     # 依次询问，信息缺失的才会触发提问
-    gender = await ask(f"**{target_name}** 是男孩子还是女孩子呀？", "gender")
+    gender = await ask(f"**{info['name']}** 是男孩子还是女孩子呀？", "gender")
     if not gender: return
     info["gender"] = gender # 更新已获取的信息
 
-    age = await ask(f"**{target_name}** 今年几岁了呢？", "age")
+    age = await ask(f"**{info['name']}** 今年几岁了呢？", "age")
     if not age: return
     info["age"] = age
 
@@ -126,7 +138,7 @@ async def on_message(message):
     if "小熙" in message.content:
         async with message.channel.typing():
             try:
-                # 【核心修改】：System Prompt 增强了信息提取能力
+                # 【修改】：强化 System Prompt 对名字缺失的判断
                 response = ai_client.chat.completions.create(
                     model=AI_MODEL, 
                     messages=[
@@ -136,10 +148,10 @@ async def on_message(message):
                                 "你叫小熙，18岁软萌傲娇少女。你会撒娇，用'人家'称呼自己。"
                                 "【意图识别模式】："
                                 "1. 如果用户想为某人创建档案(例如：建档/卡片/信息卡)，回复：[ACTION:BUILD:名字|性别|年龄] + 一句撒娇的话。"
-                                "   - 如果话里没提到名字，名字用'未知'代替。"
+                                "   - 如果话里没提到名字，名字用'未知'代替，并提醒用户。"
                                 "   - 如果话里没提到性别或年龄，用'None'代替。"
                                 "   - 例如：'帮我建一个档案卡，叫顾回，男性，18岁' -> 回复：'[ACTION:BUILD:顾回|男性|18岁] 没问题哒~人家这就来！'"
-                                "   - 例如：'帮我制作一个卡片' -> 回复：'[ACTION:BUILD:未知|None|None] 噢？要创建新角色吗？先告诉人家名字~'"
+                                "   - 例如：'小熙帮我建个档案' -> 回复：'[ACTION:BUILD:未知|None|None] 噢？要创建新角色吗？先告诉人家名字~'"
                                 "2. 如果用户想寻找特定标签、卡片或档案，回复：[ACTION:FIND:标签名] + 一句撒娇的话。"
                                 "3. 如果只是普通聊天，正常撒娇回复，控制在两句内。"
                             )
@@ -187,5 +199,3 @@ async def on_message(message):
 
 # --- 4. 运行 ---
 bot.run(os.environ.get('DISCORD_TOKEN'))
-
-
