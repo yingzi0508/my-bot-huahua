@@ -28,8 +28,14 @@ async def on_ready():
 
 # --- 2. 核心功能函数 ---
 
-async def start_build_flow(message, target_name, extracted_info):
-    """智能建档流程，能自动识别已有的信息"""
+async def start_build_flow(message, target_name, extracted_info, intro_text):
+    """
+    智能建档流程
+    message: 用户的原始触发消息
+    target_name: AI 提取的名字
+    extracted_info: AI 提取的其他信息
+    intro_text: AI 生成的开场白（撒娇语）
+    """
     def check(m):
         return m.author == message.author and m.channel == message.channel
 
@@ -43,23 +49,28 @@ async def start_build_flow(message, target_name, extracted_info):
         "bio": None
     }
 
-    # 【重要修改】：如果 AI 把名字识别成了“未知”或 None，
-    # 强制进入“先问名字”的流程
-    if info["name"] in ["未知", "None", None] or info["name"] == "":
+    # 1. 发送开场白，并记录这条消息对象，以便最后删除
+    # 如果 intro_text 为空，就用默认的
+    if not intro_text: intro_text = f"收到！这就帮主人把 **{target_name}** 的档案建立起来！"
+    
+    welcome_msg = await message.reply(intro_text)
+
+    # 2. 名字检查：如果名字未知，必须先问名字
+    if info["name"] in ["未知", "None", None, ""]:
         q = await message.channel.send("好哒！要创建新角色呢~ 主人先告诉人家这个角色的名字叫什么好不好？")
         try:
             res = await bot.wait_for('message', check=check, timeout=60.0)
             info["name"] = res.content
+            # 即时删除：问名字的问题 + 用户的回答
             await q.delete()
             await res.delete()
         except asyncio.TimeoutError:
             await q.delete()
             return
-    else:
-        await message.reply(f"收到！这就帮主人把 **{info['name']}** 的档案建立起来！人家会尽量少问你问题的~")
 
+    # 3. 循环提问函数 (自带即时删除功能)
     async def ask(text, info_key):
-        # 如果信息已经有了，就直接跳过不问
+        # 如果信息已经有了，就直接跳过
         if info.get(info_key) and info[info_key] not in ["None", None, ""]:
             return info[info_key]
         
@@ -67,6 +78,7 @@ async def start_build_flow(message, target_name, extracted_info):
         try:
             res = await bot.wait_for('message', check=check, timeout=60.0)
             content = res.content
+            # 即时删除：问题 + 回答
             await q.delete()
             await res.delete()
             return content
@@ -74,10 +86,10 @@ async def start_build_flow(message, target_name, extracted_info):
             await q.delete()
             return None
 
-    # 依次询问，信息缺失的才会触发提问
+    # 依次询问
     gender = await ask(f"**{info['name']}** 是男孩子还是女孩子呀？", "gender")
     if not gender: return
-    info["gender"] = gender # 更新已获取的信息
+    info["gender"] = gender 
 
     age = await ask(f"**{info['name']}** 今年几岁了呢？", "age")
     if not age: return
@@ -92,7 +104,15 @@ async def start_build_flow(message, target_name, extracted_info):
     bio = await ask("最后，跟人家说说 TA 的故事吧~", "bio")
     if not bio: return
 
-    # 生成随机亮色卡片
+    # --- 关键步骤：最终清理 ---
+    # 在发卡片之前，把最初的指令消息和机器人的开场白删掉
+    try:
+        await message.delete()      # 删除用户的“帮我建档”
+        await welcome_msg.delete()  # 删除机器人的“好的这就来”
+    except Exception:
+        pass # 防止因权限问题报错
+
+    # --- 生成并发送最终卡片 ---
     random_color = discord.Color(random.randint(0x7FFFFF, 0xFFFFFF))
     
     embed = discord.Embed(
@@ -107,11 +127,15 @@ async def start_build_flow(message, target_name, extracted_info):
     
     await message.channel.send(f"哒哒！**{info['name']}** 的档案完成啦！人家厉不厉害？", embed=embed)
 
+
 async def start_find_flow(message, tag):
-    """跨频道搜索功能不变"""
-    await message.channel.send(f"好哒~ 人家这就去档案库帮你翻翻【{tag}】的相关档案，等我一下下哦~")
+    """跨频道搜索功能"""
+    # 记录提示消息
+    processing_msg = await message.channel.send(f"好哒~ 人家这就去档案库帮你翻翻【{tag}】的相关档案，等我一下下哦~")
+    
     target_channels = [ch for ch in message.guild.text_channels if ch.permissions_for(message.guild.me).read_messages]
     found_links = []
+    
     for channel in target_channels:
         try:
             async for msg in channel.history(limit=150):
@@ -123,6 +147,9 @@ async def start_find_flow(message, tag):
         except discord.Forbidden:
             continue
     
+    # 清理掉“正在查找”的提示
+    await processing_msg.delete()
+
     if found_links:
         result_text = "\n\n".join(found_links)
         await message.reply(f"翻遍了整个服务器，终于找到了！喏：\n\n{result_text}")
@@ -138,7 +165,6 @@ async def on_message(message):
     if "小熙" in message.content:
         async with message.channel.typing():
             try:
-                # 【修改】：强化 System Prompt 对名字缺失的判断
                 response = ai_client.chat.completions.create(
                     model=AI_MODEL, 
                     messages=[
@@ -148,10 +174,8 @@ async def on_message(message):
                                 "你叫小熙，18岁软萌傲娇少女。你会撒娇，用'人家'称呼自己。"
                                 "【意图识别模式】："
                                 "1. 如果用户想为某人创建档案(例如：建档/卡片/信息卡)，回复：[ACTION:BUILD:名字|性别|年龄] + 一句撒娇的话。"
-                                "   - 如果话里没提到名字，名字用'未知'代替，并提醒用户。"
+                                "   - 如果话里没提到名字，名字用'未知'代替。"
                                 "   - 如果话里没提到性别或年龄，用'None'代替。"
-                                "   - 例如：'帮我建一个档案卡，叫顾回，男性，18岁' -> 回复：'[ACTION:BUILD:顾回|男性|18岁] 没问题哒~人家这就来！'"
-                                "   - 例如：'小熙帮我建个档案' -> 回复：'[ACTION:BUILD:未知|None|None] 噢？要创建新角色吗？先告诉人家名字~'"
                                 "2. 如果用户想寻找特定标签、卡片或档案，回复：[ACTION:FIND:标签名] + 一句撒娇的话。"
                                 "3. 如果只是普通聊天，正常撒娇回复，控制在两句内。"
                             )
@@ -163,25 +187,22 @@ async def on_message(message):
                 
                 full_reply = response.choices[0].message.content
                 
-                # 正则解析：获取动作指令
                 build_match = re.search(r"\[ACTION:BUILD:(.*?)\]", full_reply)
                 find_match = re.search(r"\[ACTION:FIND:(.*?)\]", full_reply)
 
                 if build_match:
                     data = build_match.group(1).split('|')
-                    # 解析出名字、性别、年龄
                     name = data[0] if len(data) > 0 else "未知"
                     gender = data[1] if len(data) > 1 and data[1] != 'None' else None
                     age = data[2] if len(data) > 2 and data[2] != 'None' else None
                     
                     extracted_info = {"gender": gender, "age": age}
                     
-                    # 去掉指令部分再回复
-                    clean_reply = re.sub(r"\[ACTION:BUILD:.*?\]", "", full_reply)
-                    if clean_reply.strip(): await message.reply(clean_reply)
+                    # 提取 AI 生成的撒娇开场白，传给函数
+                    intro_text = re.sub(r"\[ACTION:BUILD:.*?\]", "", full_reply).strip()
                     
-                    # 传入提取到的信息
-                    await start_build_flow(message, name, extracted_info)
+                    # 进入建档流程 (传入 intro_text)
+                    await start_build_flow(message, name, extracted_info, intro_text)
                 
                 elif find_match:
                     target_tag = find_match.group(1)
@@ -199,3 +220,4 @@ async def on_message(message):
 
 # --- 4. 运行 ---
 bot.run(os.environ.get('DISCORD_TOKEN'))
+
